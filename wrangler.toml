@@ -1,0 +1,13 @@
+name = "btc-signal-auditor-v12"
+main = "worker.js"
+compatibility_date = "2026-08-03"
+workers_dev = true
+
+# Cloudflare's cron service invokes the auditor independently of browser visits.
+[triggers]
+crons = ["* * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "btc-signal-audit"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
