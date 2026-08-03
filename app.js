@@ -1,86 +1,20 @@
-/* BTC Pulse: browser-only Coinbase BTC-USD signal dashboard.
-   This is deliberately a transparent heuristic, not a trained financial model. */
-const WS_URL = 'wss://ws-feed.exchange.coinbase.com';
-const CANDLES_URL = 'https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60';
-const state = { candles: [], trades: [], bids: new Map(), asks: new Map(), lastPrice: null, ws: null, paused: false, reconnectDelay: 1000, lastRender: 0 };
-const $ = (id) => document.getElementById(id);
-const fmtUSD = new Intl.NumberFormat('en-US', {style:'currency',currency:'USD',maximumFractionDigits:2});
-const fmtPct = (n, digits=2) => `${n >= 0 ? '+' : ''}${n.toFixed(digits)}%`;
-
-function setConnection(type, message) { const el=$('connection'); el.className=`status ${type}`; el.innerHTML=`<i></i> ${message}`; }
-function number(v) { return Number.isFinite(v) ? v : 0; }
-function clamp(x,a,b) { return Math.max(a,Math.min(b,x)); }
-function sigmoid(x) { return 1/(1+Math.exp(-x)); }
-function mean(a) { return a.length ? a.reduce((s,x)=>s+x,0)/a.length : 0; }
-function std(a) { if(a.length<2)return 0; const m=mean(a);return Math.sqrt(mean(a.map(x=>(x-m)**2))); }
-function ema(values, span) { if(!values.length)return 0; const k=2/(span+1); return values.reduce((v,x,i)=>i?x*k+v*(1-k):x, values[0]); }
-function agoReturn(prices, minutes) { if(prices.length <= minutes) return 0; return ((prices.at(-1)/prices.at(-1-minutes))-1)*100; }
-function classFor(v, neutral=.02) { return v > neutral ? 'positive' : v < -neutral ? 'negative' : 'neutral'; }
-
-async function loadCandles() {
-  try {
-    const response = await fetch(CANDLES_URL, {headers:{'Accept':'application/json'}});
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const raw = await response.json();
-    // Coinbase format: [time, low, high, open, close, volume], newest first.
-    state.candles = raw.map(r => ({ time:r[0]*1000, open:+r[3], high:+r[2], low:+r[1], close:+r[4], volume:+r[5] })).sort((a,b)=>a.time-b.time);
-    state.lastPrice = state.candles.at(-1)?.close ?? null;
-    $('candle-status').textContent = `${state.candles.length} 1m candles loaded`;
-    render();
-  } catch (err) {
-    $('candle-status').textContent = 'Candle history unavailable';
-    console.warn('Candle fetch failed:', err);
-  }
-}
-
-function connect() {
-  if(state.paused) return;
-  try { state.ws = new WebSocket(WS_URL); } catch(err) { scheduleReconnect(); return; }
-  setConnection('connecting','Connecting');
-  state.ws.onopen = () => {
-    state.reconnectDelay=1000; setConnection('connected','Live');
-    state.ws.send(JSON.stringify({type:'subscribe',product_ids:['BTC-USD'],channels:['ticker','level2_batch','heartbeat']}));
-  };
-  state.ws.onmessage = ({data}) => {
-    let msg; try { msg=JSON.parse(data); } catch { return; }
-    if(msg.type==='ticker' && msg.product_id==='BTC-USD') {
-      const price=+msg.price; if(Number.isFinite(price)) { state.lastPrice=price; state.trades.push({time:Date.now(),price,size:+msg.last_size||0}); state.trades=state.trades.filter(t=>t.time>Date.now()-16*60e3); updateLiveCandle(price,+msg.last_size||0); throttledRender(); }
-    }
-    if(msg.type==='snapshot' && msg.product_id==='BTC-USD') { state.bids.clear();state.asks.clear(); for(const [p,s] of msg.bids||[])state.bids.set(+p,+s);for(const [p,s] of msg.asks||[])state.asks.set(+p,+s); }
-    if(msg.type==='l2update' && msg.product_id==='BTC-USD') { for(const [side,p,s] of msg.changes||[]) { const map=side==='buy'?state.bids:state.asks; +s===0?map.delete(+p):map.set(+p,+s); } throttledRender(); }
-    if(msg.type==='error') console.warn('Coinbase feed:',msg.message);
-  };
-  state.ws.onerror = () => setConnection('error','Connection error');
-  state.ws.onclose = () => { if(!state.paused) { setConnection('connecting','Reconnecting'); scheduleReconnect(); } };
-}
-function scheduleReconnect() { setTimeout(connect,state.reconnectDelay); state.reconnectDelay=Math.min(state.reconnectDelay*1.8,30000); }
-function updateLiveCandle(price,size) {
-  const now=Math.floor(Date.now()/60000)*60000, last=state.candles.at(-1);
-  if(!last || last.time!==now) state.candles.push({time:now,open:last?.close||price,high:price,low:price,close:price,volume:size});
-  else { last.high=Math.max(last.high,price);last.low=Math.min(last.low,price);last.close=price;last.volume+=size; }
-  state.candles=state.candles.slice(-300);
-}
-function bookImbalance() {
-  const p=state.lastPrice;if(!p)return 0;
-  let bid=0,ask=0;
-  for(const [price,size] of state.bids) if(price>=p*.998) bid+=size;
-  for(const [price,size] of state.asks) if(price<=p*1.002) ask+=size;
-  return bid+ask ? (bid-ask)/(bid+ask) : 0;
-}
-function model() {
-  const closes=state.candles.map(c=>c.close), vols=state.candles.map(c=>c.volume); if(closes.length<20)return null;
-  const r1=agoReturn(closes,1),r3=agoReturn(closes,3),r5=agoReturn(closes,5),r15=agoReturn(closes,15);
-  const returns=closes.slice(-6).map((p,i,a)=>i?Math.log(p/a[i-1]):null).slice(1);
-  const vol=std(returns)*100; const fast=ema(closes.slice(-20),8),slow=ema(closes.slice(-35),21);
-  const trend=((fast/slow)-1)*100; const imbal=bookImbalance(); const avgVol=mean(vols.slice(-31,-1)); const volumeScore=avgVol?clamp((vols.at(-1)/avgVol-1),-2,3):0;
-  // Scores use bounded inputs so a single noisy tick cannot dominate.
-  const base=clamp(.72*r1+.36*r3+.18*r5 + 1.9*trend + .48*imbal + .05*volumeScore, -3,3);
-  const horizons=[1,5,10,15].map(h=>{ const decay=({1:1.12,5:1,10:.77,15:.63})[h]; const penalty=vol*({1:.65,5:.95,10:1.2,15:1.42}[h]); const score=base*decay; const p=clamp(50+35*(sigmoid(score*1.8)-.5)*2-penalty, 36,64); const direction=p>52?'UP':p<48?'DOWN':'NEUTRAL'; const confidence=clamp(Math.abs(p-50)*2.5 + Math.min(vol*10,8),4,38); return {h,p,direction,confidence}; });
-  return {r1,r3,r5,r15,vol,fast,slow,trend,imbal,volumeScore,horizons};
-}
-function renderPredictions(m) { const root=$('predictions'); if(!m){root.innerHTML='<div class="small-muted">Collecting sufficient market data…</div>';return;} root.innerHTML=m.horizons.map(x=>{const cls=x.direction==='UP'?'bullish':x.direction==='DOWN'?'bearish':'neutral-signal';const color=x.direction==='UP'?'positive':x.direction==='DOWN'?'negative':'neutral';return `<article class="prediction ${cls}"><div class="horizon">Next ${x.h} minute${x.h>1?'s':''}</div><div class="direction ${color}">${x.direction}</div><div class="probability">${x.p.toFixed(1)}%</div><div class="bar"><i style="width:${x.p}%"></i></div><div class="confidence">Signal confidence: ${x.confidence.toFixed(0)} / 100</div></article>`;}).join(''); }
-function renderChart() { const canvas=$('price-chart'), rect=canvas.getBoundingClientRect(), dpr=devicePixelRatio||1; canvas.width=rect.width*dpr;canvas.height=rect.height*dpr;const ctx=canvas.getContext('2d');ctx.scale(dpr,dpr);const w=rect.width,h=rect.height,items=state.candles.slice(-60);ctx.clearRect(0,0,w,h); if(items.length<2)return;const vals=items.map(c=>c.close),min=Math.min(...vals),max=Math.max(...vals),range=max-min||1,pad=14;const xy=(i,p)=>[i/(items.length-1)*w,h-pad-((p-min)/range)*(h-pad*2)];ctx.strokeStyle='rgba(76,229,139,.16)';ctx.lineWidth=1;for(let i=1;i<4;i++){const y=pad+(h-pad*2)*i/4;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}ctx.beginPath();items.forEach((c,i)=>{const [x,y]=xy(i,c.close);i?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.strokeStyle='#4ce58b';ctx.lineWidth=2;ctx.stroke();const [x,y]=xy(items.length-1,items.at(-1).close);ctx.fillStyle='#4ce58b';ctx.beginPath();ctx.arc(x,y,3,0,Math.PI*2);ctx.fill();ctx.fillStyle='#9aafa3';ctx.font='10px DM Mono, monospace';ctx.fillText(fmtUSD.format(max),5,12);ctx.fillText(fmtUSD.format(min),5,h-3); }
-function render() { const m=model(); if(state.lastPrice)$('price').textContent=fmtUSD.format(state.lastPrice); if(m){const set=(id,v)=>{const e=$(id);e.textContent=fmtPct(v);e.className=classFor(v);};set('return-1m',m.r1);set('return-5m',m.r5);$('volatility').textContent=`${m.vol.toFixed(3)}%`;const im=$('imbalance');im.textContent=`${(m.imbal*100).toFixed(1)}%`;im.className=classFor(m.imbal*100,.8);$('price-change').textContent=`1m: ${fmtPct(m.r1)} · 15m: ${fmtPct(m.r15)}`;$('price-change').className=`price-change ${classFor(m.r1)}`;const rows=[['Momentum (1m / 5m)',`${fmtPct(m.r1)} / ${fmtPct(m.r5)}`],['EMA trend (8 vs. 21)',fmtPct(m.trend,3)],['Top-book imbalance',`${(m.imbal*100).toFixed(1)}%`],['Current / avg. volume',`${(1+m.volumeScore).toFixed(2)}×`],['5m realized log volatility',`${m.vol.toFixed(4)}%`],['Method','Transparent heuristic v1']];$('diagnostics').innerHTML=rows.map(([a,b])=>`<div><dt>${a}</dt><dd>${b}</dd></div>`).join('');}renderPredictions(m);renderChart();$('updated').textContent=`Updated ${new Date().toLocaleTimeString()}`; }
-function throttledRender(){const now=Date.now();if(now-state.lastRender>700){state.lastRender=now;render();}}
-$('pause-button').onclick=()=>{state.paused=!state.paused;const b=$('pause-button');b.textContent=state.paused?'Resume':'Pause';if(state.paused){state.ws?.close();setConnection('connecting','Paused');}else connect();};
-window.addEventListener('resize',renderChart); loadCandles().then(connect); setInterval(loadCandles,5*60e3); setInterval(render,10e3);
+const M=window.BTCModules, $=id=>document.getElementById(id);
+const state={candles:[],trades:[],book:{bids:new Map(),asks:new Map()},lastPrice:null,context:{},forecasts:[],outcomes:[],paused:false,ws:null,retry:1000,lastRender:0};
+const USD=new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2});
+async function fetchJSON(url){const r=await fetch(url);if(!r.ok)throw Error(r.status);return r.json();}
+async function loadCandles(){try{const raw=await fetchJSON('https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60');state.candles=raw.map(x=>({time:x[0]*1000,open:+x[3],high:+x[2],low:+x[1],close:+x[4],volume:+x[5]})).sort((a,b)=>a.time-b.time);state.lastPrice=state.candles.at(-1)?.close; $('candle-status').textContent=`${state.candles.length} one-minute observations`;render();}catch(e){$('candle-status').textContent='Candle history unavailable';}}
+async function loadContext(){const calls=[['fear','https://api.alternative.me/fng/?limit=1'],['funding','https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT'],['fees','https://mempool.space/api/v1/fees/recommended']];for(const [key,url] of calls)try{const d=await fetchJSON(url);state.context[key]=key==='fear'?d.data?.[0]:d;}catch(e){state.context[key]=null;}render();}
+function connect(){if(state.paused)return;try{state.ws=new WebSocket('wss://ws-feed.exchange.coinbase.com');}catch(e){return retry();}$('connection').textContent='Connecting';state.ws.onopen=()=>{state.retry=1000;$('connection').textContent='Live';state.ws.send(JSON.stringify({type:'subscribe',product_ids:['BTC-USD'],channels:['ticker','level2_batch','heartbeat']}));};state.ws.onmessage=e=>handle(JSON.parse(e.data));state.ws.onclose=()=>{if(!state.paused){$('connection').textContent='Reconnecting';retry();}};state.ws.onerror=()=>{$('connection').textContent='Feed error';};}
+function retry(){setTimeout(connect,state.retry);state.retry=Math.min(30000,state.retry*1.7);}
+function handle(m){if(m.type==='snapshot'){state.book.bids.clear();state.book.asks.clear();for(const [p,q] of m.bids||[])state.book.bids.set(+p,+q);for(const [p,q] of m.asks||[])state.book.asks.set(+p,+q);}if(m.type==='l2update')for(const [side,p,q] of m.changes||[]){const map=side==='buy'?state.book.bids:state.book.asks;+q?map.set(+p,+q):map.delete(+p);}if(m.type==='ticker'&&m.product_id==='BTC-USD'){const price=+m.price;if(!Number.isFinite(price))return;state.lastPrice=price;const bids=[...state.book.bids.keys()],asks=[...state.book.asks.keys()],mid=bids.length&&asks.length?(Math.max(...bids)+Math.min(...asks))/2:price;state.trades.push({time:Date.now(),price,size:+m.last_size||0,side:price>=mid?'buy':price<mid?'sell':'unknown'});state.trades=state.trades.filter(t=>t.time>Date.now()-75*60e3);updateCandle(price,+m.last_size||0);throttle();}}
+function updateCandle(price,size){const t=Math.floor(Date.now()/60000)*60000,last=state.candles.at(-1);if(!last||last.time!==t)state.candles.push({time:t,open:last?.close||price,high:price,low:price,close:price,volume:size});else{last.close=price;last.high=Math.max(last.high,price);last.low=Math.min(last.low,price);last.volume+=size;}state.candles=state.candles.slice(-300);}
+function features(){const closes=state.candles.map(x=>x.close);if(closes.length<35)return null;const vol=M.volatilityModule(closes),trend=M.trendStateModule(closes),micro=M.microstructureModule(state.book,state.trades,state.lastPrice),context=M.contextModule(state.context);return {vol,trend,micro,context};}
+function resolveForecasts(){const now=Date.now(),price=state.lastPrice;for(const f of state.forecasts.filter(x=>!x.done&&now>=x.due)){f.done=true;const y=price>f.entry?1:0;state.outcomes.push({...f,y});M.onlineUpdate(f.horizon,f.p,y,f.features);}state.outcomes=state.outcomes.slice(-320);}
+function queueForecasts(f){const now=Math.floor(Date.now()/60000)*60000;for(const horizon of [1,5,15,60]){const existing=state.forecasts.find(x=>x.horizon===horizon&&x.stamp===now);if(existing)continue;const e=M.ensemble(f,horizon);state.forecasts.push({horizon,stamp:now,due:now+horizon*60000,entry:state.lastPrice,p:e.p,features:f,done:false});}state.forecasts=state.forecasts.slice(-500);}
+function diagnostics(){const o=state.outcomes;if(!o.length)return {brier:null,hit:null,buckets:[]};const brier=o.reduce((s,x)=>s+(x.p-x.y)**2,0)/o.length;const hit=o.reduce((s,x)=>s+((x.p>=.5)===Boolean(x.y)),0)/o.length;const ranges=[[.35,.45],[.45,.55],[.55,.65]];const buckets=ranges.map(([a,b])=>{const x=o.filter(q=>q.p>=a&&q.p<b);return {label:`${Math.round(a*100)}–${Math.round(b*100)}%`,n:x.length,p:x.length?x.reduce((s,q)=>s+q.p,0)/x.length:null,actual:x.length?x.reduce((s,q)=>s+q.y,0)/x.length:null};});return {brier,hit,buckets};}
+function renderPredictions(f){const target=$('predictions');if(!f){target.innerHTML='<p class="muted">Collecting the minimum candle history required for the signal modules…</p>';return;}const n=state.outcomes.length;target.innerHTML=[1,5,15,60].map(h=>{const e=M.ensemble(f,h),ci=M.confidenceInterval(e.p,n,f.vol.garch.ratio),d=e.p>.515?'UP':e.p<.485?'DOWN':'MIXED',cls=d==='UP'?'up':d==='DOWN'?'down':'neutral';return `<div class="prediction"><h3>Next ${h===60?'hour':h+' minute'+(h>1?'s':'')}</h3><div class="direction ${cls}">${d}</div><div class="prob">${(e.p*100).toFixed(1)}% probability of positive close</div><div class="interval">Volatility-aware 95% interval: ${(ci[0]*100).toFixed(0)}–${(ci[1]*100).toFixed(0)}%</div><div class="probbar ${cls}"><i style="width:${e.p*100}%"></i></div></div>`;}).join('');}
+function renderFeatures(f){if(!f)return;const rows=[['Volatility · EWMA',`${(f.vol.ewma*100).toFixed(3)}%`,'Market data · recent-shock volatility'],['Volatility · GJR-GARCH forecast',`${(f.vol.garch.sigma*100).toFixed(3)}% (${f.vol.garch.ratio.toFixed(2)}× baseline)`,'Market data · conditional variance / interval width'],['Trend · Kalman velocity',`${(f.trend.velocity*10000).toFixed(3)} bp/min`,'Market data · filtered local price movement'],['Regime · Hurst estimate',`${f.trend.hurst.toFixed(2)} · ${f.trend.regime}`,'Market data · persistence versus reversal weighting'],['Book depth imbalance',`${(f.micro.imbalance*100).toFixed(1)}%`,'Market data · L2 top-depth ratio'],['Trade-flow imbalance',`${(f.micro.flow*100).toFixed(1)}%`,'Market data · classified aggressor-flow proxy'],['Spread / effective spread',`${(f.micro.spread*10000).toFixed(2)} / ${(f.micro.effectiveSpread*10000).toFixed(2)} bp`,'Market data · liquidity-stress proxy'],['VPIN-style toxicity',f.micro.vpin.toFixed(2),'Market data · volume-bucket order-flow imbalance'],['Fear & Greed',f.context.fear??'Unavailable','Slow context · alternative.me daily'],['Perpetual funding',f.context.funding==null?'Unavailable':`${(f.context.funding*100).toFixed(4)}%`,'Slow context · Binance public field'],['Mempool fastest fee',f.context.fee==null?'Unavailable':`${f.context.fee} sat/vB`,'On-chain context · negligible directional weight']];$('feature-table').innerHTML=rows.map(r=>`<div class="feature-row"><span class="name">${r[0]}</span><span class="value">${r[1]}</span><span class="note">${r[2]}</span></div>`).join('');}
+function renderDiagnostics(){const d=diagnostics();$('brier').textContent=d.brier==null?'—':d.brier.toFixed(3);$('hit-rate').textContent=d.hit==null?'—':`${(d.hit*100).toFixed(1)}%`;$('sample-size').textContent=`Session outcomes: ${state.outcomes.length}`;$('calibration').innerHTML=`<div class="cal-row head"><span>Forecast bucket</span><span>Mean forecast</span><span>Observed up</span></div>${d.buckets.map(x=>`<div class="cal-row"><span>${x.label} (n=${x.n})</span><span>${x.p==null?'—':(x.p*100).toFixed(1)+'%'}</span><span>${x.actual==null?'—':(x.actual*100).toFixed(1)+'%'}</span></div>`).join('')}`;}
+function chart(f){const c=$('price-chart'),r=c.getBoundingClientRect(),d=devicePixelRatio||1;c.width=r.width*d;c.height=r.height*d;const x=c.getContext('2d');x.scale(d,d);const w=r.width,h=r.height,data=state.candles.slice(-90);x.clearRect(0,0,w,h);if(data.length<2)return;const vals=data.map(q=>q.close),min=Math.min(...vals),max=Math.max(...vals),range=max-min||1,pad=13,xy=(i,p)=>[i/(data.length-1)*w,h-pad-(p-min)/range*(h-2*pad)];x.strokeStyle='#e0dfda';x.lineWidth=1;for(let i=1;i<4;i++){let y=pad+(h-2*pad)*i/4;x.beginPath();x.moveTo(0,y);x.lineTo(w,y);x.stroke();}x.beginPath();data.forEach((q,i)=>{let [a,b]=xy(i,q.close);i?x.lineTo(a,b):x.moveTo(a,b)});x.strokeStyle='#242424';x.lineWidth=1.35;x.stroke();if(f){const path=f.trend.path.slice(-data.length);x.beginPath();data.forEach((q,i)=>{const p=Math.exp(path[i]??Math.log(q.close));let [a,b]=xy(i,p);i?x.lineTo(a,b):x.moveTo(a,b)});x.strokeStyle='#147a55';x.lineWidth=1.6;x.stroke();}x.fillStyle='#777';x.font='10px ui-monospace';x.fillText(USD.format(max),3,10);x.fillText(USD.format(min),3,h-2);}
+function render(){const f=features();resolveForecasts();if(f)queueForecasts(f);if(state.lastPrice)$('price').textContent=USD.format(state.lastPrice);$('price-detail').textContent=f?`GARCH state: ${f.vol.garch.ratio.toFixed(2)}× baseline volatility · Hurst: ${f.trend.hurst.toFixed(2)}`:'Reading market state…';renderPredictions(f);renderFeatures(f);renderDiagnostics();chart(f);$('updated').textContent=`Updated ${new Date().toLocaleTimeString()}`;}
+function throttle(){if(Date.now()-state.lastRender>700){state.lastRender=Date.now();render();}}$('pause-button').onclick=()=>{state.paused=!state.paused;$('pause-button').textContent=state.paused?'Resume live feed':'Pause live feed';if(state.paused){state.ws?.close();$('connection').textContent='Paused';}else connect();};window.addEventListener('resize',()=>chart(features()));loadCandles().then(()=>{loadContext();connect();});setInterval(loadCandles,5*60e3);setInterval(loadContext,15*60e3);setInterval(render,9000);

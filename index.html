@@ -1,68 +1,54 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="A browser-only, public-data BTC-USD short-horizon signal dashboard." />
-  <title>BTC Pulse — Short-Horizon Signal Engine</title>
-  <link rel="stylesheet" href="style.css" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="An open, browser-only Bitcoin short-horizon forecast research notebook using public data.">
+  <title>BTC Signal Notebook — Live research dashboard</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main class="shell">
-    <header class="topbar">
-      <div>
-        <p class="eyebrow">COINBASE BTC-USD · PUBLIC MARKET DATA</p>
-        <h1>BTC Pulse</h1>
-        <p class="subtitle">Short-horizon directional signal engine</p>
-      </div>
-      <div class="status-wrap">
-        <span id="connection" class="status connecting"><i></i> Connecting</span>
-        <span id="updated" class="updated">Awaiting market data</span>
-      </div>
-    </header>
+  <nav class="nav"><a class="wordmark" href="#top">signal<span>notebook</span></a><div><a href="#live">Live model</a><a href="#methodology">Methodology</a><a href="#sources">Data notes</a></div></nav>
+  <main id="top">
+    <article class="article-head">
+      <p class="kicker">AN OPEN MARKET-MICROSTRUCTURE EXPERIMENT · V1.1</p>
+      <h1>What can public data say about Bitcoin’s next few minutes?</h1>
+      <p class="dek">A transparent, browser-only ensemble for studying BTC-USD direction at 1 minute, 5 minutes, 15 minutes, and 1 hour—designed to show its work, including when it is wrong.</p>
+      <p class="byline"><span id="connection" class="live-dot">Connecting</span> · Data: Coinbase, alternative.me, Binance, mempool.space · <span id="updated">Starting…</span></p>
+    </article>
 
-    <section class="hero-grid" aria-label="Market snapshot">
-      <article class="price-card card">
-        <span class="label">BTC-USD</span>
-        <div id="price" class="price">—</div>
-        <div id="price-change" class="price-change">Waiting for live trades</div>
-      </article>
-      <article class="metric card"><span class="label">1m return</span><strong id="return-1m">—</strong></article>
-      <article class="metric card"><span class="label">5m return</span><strong id="return-5m">—</strong></article>
-      <article class="metric card"><span class="label">Realized vol. (5m)</span><strong id="volatility">—</strong></article>
-      <article class="metric card"><span class="label">Book imbalance</span><strong id="imbalance">—</strong></article>
+    <section id="live" class="live-section" aria-label="Live BTC signal model">
+      <div class="section-intro"><p class="kicker">LIVE RESEARCH FIGURE</p><h2>BTC-USD directional ensemble</h2><p>The point estimate is deliberately accompanied by a volatility-aware interval and an accumulating calibration record. A forecast is a hypothesis, not a trade instruction.</p></div>
+      <figure class="hero-figure">
+        <div class="price-row"><div><span class="figure-label">BTC-USD LAST TRADE</span><strong id="price">—</strong><span id="price-detail">Waiting for a live print</span></div><div class="session-meta"><button id="pause-button" type="button">Pause live feed</button><span id="sample-size">Session outcomes: 0</span></div></div>
+        <div id="predictions" class="predictions" aria-live="polite"></div>
+        <figcaption>Figure 1. Directional probabilities are logistic-ensemble outputs. Intervals intentionally widen when conditional volatility is elevated or the session has few resolved forecasts.</figcaption>
+      </figure>
+
+      <div class="figure-grid">
+        <figure class="paper-figure"><div class="figure-heading"><div><span class="figure-label">PRICE / FILTERED TREND</span><h3>One-minute price path</h3></div><span id="candle-status" class="muted">Loading history…</span></div><div class="chart"><canvas id="price-chart" aria-label="One minute BTC-USD price and Kalman trend chart"></canvas></div><figcaption>Figure 2. Black is Coinbase BTC-USD; the restrained accent line is a one-dimensional Kalman trend estimate.</figcaption></figure>
+        <aside class="diagnostics"><span class="figure-label">AUDIT PANEL</span><h3>How has it done this session?</h3><div class="metric-row"><div><span>Brier score</span><strong id="brier">—</strong><small>lower is better; 0.25 ≈ unskilled 50/50</small></div><div><span>Rolling hit rate</span><strong id="hit-rate">—</strong><small>resolved direction calls</small></div></div><div id="calibration" class="calibration"></div><p class="caption">Figure 3. A small reliability table by probability bucket. It remains deliberately blank until forecasts mature; small samples are not evidence.</p></aside>
+      </div>
+
+      <section class="feature-section"><div class="section-intro narrow"><p class="kicker">INSPECTABLE FEATURES</p><h2>What the ensemble can see</h2><p>Every feature below is standardized before it enters the horizon-specific logistic model. “Context” inputs are intentionally weak modifiers, not rapid price signals.</p></div><div id="feature-table" class="feature-table"></div></section>
+      <div class="warning"><strong>Research disclaimer.</strong> This is an educational visualization of noisy public data, not investment, trading, or financial advice. It has no execution logic, has not been represented as profitable, and may fail abruptly in changing market conditions. Short-horizon probabilities do not account for fees, spread crossing, slippage, latency, taxes, or individual circumstances.</div>
     </section>
 
-    <section class="card signal-panel">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">LIVE MODEL OUTPUT</p>
-          <h2>Directional probabilities</h2>
-        </div>
-        <button id="pause-button" class="button" type="button">Pause</button>
-      </div>
-      <p class="method">A transparent heuristic combines recent momentum, price-vs-EMA trend, volatility, volume activity, and top-of-book order imbalance. Predictions mean the probability of a positive close at each horizon, not a guaranteed move.</p>
-      <div id="predictions" class="prediction-grid" aria-live="polite"></div>
-    </section>
+    <article id="methodology" class="methodology prose">
+      <p class="kicker">METHODOLOGY</p><h2>An ensemble is more honest when its parts remain visible.</h2>
+      <p class="lead">At one-minute resolution, Bitcoin is largely a market-microstructure problem: trades consume liquidity, the book replenishes, and quoted prices bounce. As horizons widen, short-lived book signals decay and local trend, volatility state, and slower positioning context deserve relatively more attention. This page follows that division rather than pretending one indicator rules every interval.</p>
+      <h3>1. Volatility is a state, not a constant</h3><p>The model estimates return variance two ways. RiskMetrics-style <em>EWMA</em> gives recent shocks more weight. A compact <em>GARCH(1,1)</em> likelihood fit then forecasts conditional variance from a long-run level, the most recent squared return, and the last conditional variance. A GJR-style negative-shock term is included because a negative return can plausibly affect the next variance differently from an equal positive return. The model uses this state as a feature and to widen forecast intervals. It does not claim a volatile market is directionally predictable.</p>
+      <h3>2. Trend needs a regime check</h3><p>A one-dimensional <em>Kalman filter</em> smooths log-price into a local level and velocity without locking the page to a fixed moving-average window. A rolling <em>Hurst estimate</em>, calculated here from a variance-ratio approximation, asks whether recent increments look more persistent or more mean-reverting than a random walk. When the estimate leans toward persistence, trend receives more weight; when it leans toward reversal, the ensemble activates a modest contrarian distance-from-trend feature.</p>
+      <blockquote>“A probability is useful only alongside the record of what similar probabilities actually did.”</blockquote>
+      <h3>3. The shortest horizon listens to liquidity</h3><p>Coinbase’s public Level 2 feed supplies near-book depth. The microstructure module measures depth imbalance, quoted spread, and trade-flow imbalance. Trade direction is an approximation: a print at or above the contemporaneous mid is classified as buyer initiated, and one below it as seller initiated. A volume-bucketed VPIN-style imbalance summarizes whether one-sided flow persists. These are deliberately labeled proxies; a browser feed cannot reconstruct a complete institutional order-flow record.</p>
+      <h3>4. Slow context should stay slow</h3><p>The Crypto Fear &amp; Greed Index, perpetual funding, and mempool fee estimates are fetched only as contextual regime inputs. Their cadences are daily, periodically updated, and block/network-paced—not minute-by-minute alpha. In particular, on-chain congestion is displayed separately and given negligible short-horizon weight. If a public endpoint is unavailable due to a browser or regional restriction, its feature becomes neutral rather than silently substituted.</p>
+      <h3>5. A small logistic ensemble, then an honest scorecard</h3><p>Each horizon has a readable initial weight vector. It combines standardized modules with a logistic link, not an opaque model. Forecasts are queued and labeled only after their horizon matures. A lightweight online logistic-SGD step can adjust weights during the current browser session; its learning rate is intentionally small and clipped. The audit panel reports the Brier score, directional hit rate, and a probability-bucket reliability table from those resolved forecasts. The confidence interval is a conservative Wilson-style approximation with an effective sample size reduced in high GARCH volatility states.</p>
+      <p>The design choice is intentional: an empty calibration table is preferable to invented historical skill. Reloading starts a new research session, so the page never presents unverified backtest performance as live evidence.</p>
+    </article>
 
-    <section class="lower-grid">
-      <article class="card chart-card">
-        <div class="section-heading compact">
-          <div><p class="eyebrow">LAST 60 MINUTES</p><h2>Price</h2></div>
-          <span id="candle-status" class="small-muted">Loading candles…</span>
-        </div>
-        <div class="chart-wrap"><canvas id="price-chart" aria-label="BTC-USD price chart"></canvas></div>
-      </article>
-      <article class="card details-card">
-        <p class="eyebrow">MODEL DIAGNOSTICS</p>
-        <h2>Current inputs</h2>
-        <dl id="diagnostics" class="diagnostics"></dl>
-        <div class="disclaimer"><strong>Important:</strong> This is an educational market-data experiment, not financial advice. Crypto is volatile; signals can be wrong. Do not automate trades or risk money based solely on this dashboard.</div>
-      </article>
-    </section>
-
-    <footer>Data: Coinbase Exchange public WebSocket and candle endpoint · Runs entirely in your browser · <a href="https://docs.cdp.coinbase.com/exchange/websocket-feed/overview" target="_blank" rel="noopener">Feed documentation</a></footer>
+    <section id="sources" class="sources prose"><p class="kicker">DATA NOTES</p><h2>Free, keyless sources—and their limits</h2><p><strong>Coinbase Exchange</strong> provides public BTC-USD ticker, Level 2, and one-minute candle data continuously while the page is open. <strong>alternative.me</strong> provides the daily Fear &amp; Greed Index. <strong>Binance Futures</strong> provides its public premium-index/funding field as a slower positioning proxy; if it is unavailable, the feature is neutral. <strong>mempool.space</strong> provides recommended-fee estimates, refreshed on a minutes-scale cadence. No API key, account, paid feed, backend, persistent tracker, or order-routing capability is used.</p></section>
   </main>
-  <script src="app.js"></script>
+  <footer>BTC Signal Notebook v1.1 · Built as a static research page. Public feeds can be delayed, unavailable, or revised.</footer>
+  <script src="modules.js"></script><script src="app.js"></script>
 </body>
 </html>
