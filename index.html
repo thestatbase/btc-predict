@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="A browser-only, public-data BTC-USD short-horizon signal dashboard." />
+  <title>BTC Pulse — Short-Horizon Signal Engine</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">COINBASE BTC-USD · PUBLIC MARKET DATA</p>
+        <h1>BTC Pulse</h1>
+        <p class="subtitle">Short-horizon directional signal engine</p>
+      </div>
+      <div class="status-wrap">
+        <span id="connection" class="status connecting"><i></i> Connecting</span>
+        <span id="updated" class="updated">Awaiting market data</span>
+      </div>
+    </header>
+
+    <section class="hero-grid" aria-label="Market snapshot">
+      <article class="price-card card">
+        <span class="label">BTC-USD</span>
+        <div id="price" class="price">—</div>
+        <div id="price-change" class="price-change">Waiting for live trades</div>
+      </article>
+      <article class="metric card"><span class="label">1m return</span><strong id="return-1m">—</strong></article>
+      <article class="metric card"><span class="label">5m return</span><strong id="return-5m">—</strong></article>
+      <article class="metric card"><span class="label">Realized vol. (5m)</span><strong id="volatility">—</strong></article>
+      <article class="metric card"><span class="label">Book imbalance</span><strong id="imbalance">—</strong></article>
+    </section>
+
+    <section class="card signal-panel">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">LIVE MODEL OUTPUT</p>
+          <h2>Directional probabilities</h2>
+        </div>
+        <button id="pause-button" class="button" type="button">Pause</button>
+      </div>
+      <p class="method">A transparent heuristic combines recent momentum, price-vs-EMA trend, volatility, volume activity, and top-of-book order imbalance. Predictions mean the probability of a positive close at each horizon, not a guaranteed move.</p>
+      <div id="predictions" class="prediction-grid" aria-live="polite"></div>
+    </section>
+
+    <section class="lower-grid">
+      <article class="card chart-card">
+        <div class="section-heading compact">
+          <div><p class="eyebrow">LAST 60 MINUTES</p><h2>Price</h2></div>
+          <span id="candle-status" class="small-muted">Loading candles…</span>
+        </div>
+        <div class="chart-wrap"><canvas id="price-chart" aria-label="BTC-USD price chart"></canvas></div>
+      </article>
+      <article class="card details-card">
+        <p class="eyebrow">MODEL DIAGNOSTICS</p>
+        <h2>Current inputs</h2>
+        <dl id="diagnostics" class="diagnostics"></dl>
+        <div class="disclaimer"><strong>Important:</strong> This is an educational market-data experiment, not financial advice. Crypto is volatile; signals can be wrong. Do not automate trades or risk money based solely on this dashboard.</div>
+      </article>
+    </section>
+
+    <footer>Data: Coinbase Exchange public WebSocket and candle endpoint · Runs entirely in your browser · <a href="https://docs.cdp.coinbase.com/exchange/websocket-feed/overview" target="_blank" rel="noopener">Feed documentation</a></footer>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
