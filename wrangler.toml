@@ -1,4 +1,4 @@
-name = "btc-signal-auditor-v12"
+name = "btc-predict"
 main = "worker.js"
 compatibility_date = "2026-08-03"
 workers_dev = true
@@ -9,5 +9,5 @@ crons = ["* * * * *"]
 
 [[d1_databases]]
 binding = "DB"
-database_name = "btc-signal-audit"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_name = "btc-predict"
+database_id = "2d2b3168-049c-4fa5-a4bf-c23338f530c0"
