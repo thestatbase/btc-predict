@@ -4,14 +4,24 @@ const pct=x=>x==null?'—':`${(x*100).toFixed(1)}%`;
 let base='', livePrice=null, wsRetry=1000;
 
 function workerBase(){return (window.AUDIT_API||'').replace(/\/api\/audit.*$/,'');}
-function liveURL(minutes,line){let u=`${base}/api/live?minutes=${encodeURIComponent(minutes)}`;if(line!=null)u+=`&line=${encodeURIComponent(line)}`;return u;}
-function status(msg,ok=false){$('service-status').textContent=msg;$('service-status').style.color=ok?'var(--green)':'var(--blue)';}
+function liveURL(minutes,line){
+  let u=`${base}/api/live`;
+  const p=[];
+  if(minutes) p.push(`minutes=${encodeURIComponent(minutes)}`);
+  if(line!=null) p.push(`line=${encodeURIComponent(line)}`);
+  return p.length?u+'?'+p.join('&'):u;
+}
+function status(msg,ok=false){
+  $('service-status').textContent=msg;
+  $('service-status').style.color=ok?'var(--green)':'var(--blue)';
+}
 function callClass(p){return p>.515?['HIGHER','up']:p<.485?['LOWER','down']:['EVENLY BALANCED','mixed'];}
 
-/* Coinbase WebSocket — live price ticks only, no API key required */
+/* Coinbase WebSocket — live price ticks, no API key */
 function connectWS(){
   let ws;
-  try { ws=new WebSocket('wss://ws-feed.exchange.coinbase.com'); } catch(e){ scheduleWSRetry(); return; }
+  try { ws=new WebSocket('wss://ws-feed.exchange.coinbase.com'); }
+  catch(e){ scheduleWSRetry(); return; }
   ws.onopen=()=>{
     wsRetry=1000;
     ws.send(JSON.stringify({type:'subscribe',product_ids:['BTC-USD'],channels:['ticker']}));
@@ -30,11 +40,11 @@ function connectWS(){
 }
 function scheduleWSRetry(){ setTimeout(connectWS,wsRetry); wsRetry=Math.min(30000,wsRetry*1.8); }
 
-/* Worker API — model projections */
-function projectionCard(p){
+/* Worker API — single call returns all 4 horizons */
+function projectionCard(p, h){
   const [label,cls]=callClass(p.probabilityUp);
   return `<article class="projection">
-    <h3>Next ${p.minutes===60?'hour':p.minutes+' minute'+(p.minutes>1?'s':'')}</h3>
+    <h3>Next ${h===60?'hour':h+' minute'+(h>1?'s':'')}</h3>
     <div class="call ${cls}">${label}</div>
     <div class="probability">${pct(p.probabilityUp)}</div>
     <dl>
@@ -46,15 +56,11 @@ function projectionCard(p){
 }
 async function refreshForecast(){
   try {
-    const horizons=[1,5,15,60];
-    const projections=await Promise.all(horizons.map(h=>
-      fetch(liveURL(h),{cache:'no-store'}).then(r=>r.json()).then(x=>x.projection)
-    ));
-    const d0=await fetch(liveURL(5),{cache:'no-store'}).then(r=>r.json());
-    if(!livePrice) $('current-price').textContent=usd(projections[1].price);
-    $('vol-state').textContent=`${d0.features.garchRatio.toFixed(2)}× baseline`;
-    $('regime').textContent=d0.features.hurst>.54?'Persistent':d0.features.hurst<.46?'Mean-reverting':'Mixed';
-    $('projection-cards').innerHTML=projections.map(projectionCard).join('');
+    const d=await fetch(liveURL(),{cache:'no-store'}).then(r=>{if(!r.ok)throw Error(r.status);return r.json();});
+    if(!livePrice) $('current-price').textContent=usd(d.projections[5].price);
+    $('vol-state').textContent=`${d.features.garchRatio.toFixed(2)}× baseline`;
+    $('regime').textContent=d.features.hurst>.54?'Persistent':d.features.hurst<.46?'Mean-reverting':'Mixed';
+    $('projection-cards').innerHTML=[1,5,15,60].map(h=>projectionCard(d.projections[h],h)).join('');
     status('Live model connected',true);
   } catch(e){
     status('Live model unavailable');
@@ -64,7 +70,7 @@ async function refreshForecast(){
 
 /* Audit record */
 function auditStats(data){
-  const vals=Object.values(data.summary||{}),resolved=vals.reduce((s,x)=>s+(x.n||0),0);
+  const vals=Object.values(data.summary||{}), resolved=vals.reduce((s,x)=>s+(x.n||0),0);
   const valid=vals.filter(x=>x.brier!=null);
   const b=valid.length?valid.reduce((s,x)=>s+x.brier,0)/valid.length:null;
   const h=valid.length?valid.reduce((s,x)=>s+x.hit,0)/valid.length:null;
@@ -78,8 +84,16 @@ function table(data){
   </tr></thead><tbody>
   ${[1,5,15,60].map(h=>{
     const x=s[h]||{};
-    const b=(x.buckets||[]).filter(q=>q.n).map(q=>`${q.bucket}: forecast ${pct(q.forecast)}, observed ${pct(q.observed)} (n=${q.n})`).join('<br>')||'No resolved calls yet';
-    return `<tr><td>${h===60?'1 hour':h+' min'}</td><td>${x.n||0}</td><td>${x.brier==null?'—':x.brier.toFixed(3)}</td><td>${pct(x.hit)}</td><td><span class="bucket">${b}</span></td></tr>`;
+    const b=(x.buckets||[]).filter(q=>q.n)
+      .map(q=>`${q.bucket}: forecast ${pct(q.forecast)}, observed ${pct(q.observed)} (n=${q.n})`)
+      .join('<br>')||'No resolved calls yet';
+    return `<tr>
+      <td>${h===60?'1 hour':h+' min'}</td>
+      <td>${x.n||0}</td>
+      <td>${x.brier==null?'—':x.brier.toFixed(3)}</td>
+      <td>${pct(x.hit)}</td>
+      <td><span class="bucket">${b}</span></td>
+    </tr>`;
   }).join('')}</tbody></table>`;
 }
 async function refreshAudit(){
@@ -87,10 +101,15 @@ async function refreshAudit(){
     const d=await fetch(window.AUDIT_API,{cache:'no-store'}).then(r=>r.json());
     const x=auditStats(d);
     $('audit-overview').innerHTML=`
-      <div class="audit-stat"><span>Resolved forecasts</span><strong>${x.resolved.toLocaleString()}</strong><small>all stored horizons</small></div>
-      <div class="audit-stat"><span>Mean Brier score</span><strong>${x.b==null?'—':x.b.toFixed(3)}</strong><small>lower is better</small></div>
-      <div class="audit-stat"><span>Mean hit rate</span><strong>${pct(x.h)}</strong><small>side of 50% only</small></div>
-      <div class="audit-stat"><span>Latest audit</span><strong>${x.last?new Date(x.last).toLocaleTimeString():'—'}</strong><small>${d.latestRun?.status||'awaiting run'}</small></div>`;
+      <div class="audit-stat"><span>Resolved forecasts</span>
+        <strong>${x.resolved.toLocaleString()}</strong><small>all stored horizons</small></div>
+      <div class="audit-stat"><span>Mean Brier score</span>
+        <strong>${x.b==null?'—':x.b.toFixed(3)}</strong><small>lower is better</small></div>
+      <div class="audit-stat"><span>Mean hit rate</span>
+        <strong>${pct(x.h)}</strong><small>side of 50% only</small></div>
+      <div class="audit-stat"><span>Latest audit</span>
+        <strong>${x.last?new Date(x.last).toLocaleTimeString():'—'}</strong>
+        <small>${d.latestRun?.status||'awaiting run'}</small></div>`;
     $('audit-table').innerHTML=table(d);
   } catch(e){
     $('audit-overview').innerHTML='<p class="loading">Audit record unavailable.</p>';
@@ -102,11 +121,12 @@ $('line-form').addEventListener('submit',async e=>{
   e.preventDefault();
   const minutes=+$('minutes').value, line=+$('price-line').value, box=$('line-result');
   if(!Number.isFinite(minutes)||minutes<1||minutes>240||!Number.isFinite(line)||line<=0){
-    box.innerHTML='<p>Enter a time from 1–240 minutes and a positive BTC-USD price line.</p>'; return;
+    box.innerHTML='<p>Enter a time from 1–240 minutes and a positive price line.</p>'; return;
   }
   box.innerHTML='<p>Calculating…</p>';
   try {
-    const p=(await fetch(liveURL(minutes,line),{cache:'no-store'}).then(r=>r.json())).projection;
+    const d=await fetch(liveURL(minutes,line),{cache:'no-store'}).then(r=>r.json());
+    const p=d.custom;
     box.innerHTML=`<div class="result-grid">
       <div><span>Question</span><strong>BTC in ${minutes} min</strong></div>
       <div><span>Price line</span><strong>${usd(p.line)}</strong></div>
